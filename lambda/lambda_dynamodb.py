@@ -1,58 +1,34 @@
 import json
 import boto3
 
-# Get the service resource.
 dynamodb = boto3.resource('dynamodb')
+table = dynamodb.Table('users')   # La table doit être créée par Terraform
 
-# Create the DynamoDB table.
-def create_table(tableName='users'):
-    table = dynamodb.create_table(
-        TableName=tableName,
-        KeySchema=[
-            {
-                'AttributeName': 'username',
-                'KeyType': 'HASH'
-            },
-            {
-                'AttributeName': 'last_name',
-                'KeyType': 'RANGE'
-            }
-        ],
-        AttributeDefinitions=[
-            {
-                'AttributeName': 'username',
-                'AttributeType': 'S'
-            },
-            {
-                'AttributeName': 'last_name',
-                'AttributeType': 'S'
-            },
-        ],
-        ProvisionedThroughput={
-            'ReadCapacityUnits': 5,
-            'WriteCapacityUnits': 5
-        }
-    )
-
-    # Wait until the table exists.
-    table.wait_until_exists()
-
-    return table
-
-#  Creating a new item
-def insert_item(table, username, first_name, last_name, age, account_type):
+# CREATE
+def insert_item(username, first_name, last_name, age, account_type):
     table.put_item(
         Item={
-                'username': username,
-                'first_name': first_name,
-                'last_name': last_name,
-                'age': age,
-                'account_type': account_type,
-            }
+            'username': username,
+            'first_name': first_name,
+            'last_name': last_name,
+            'age': age,
+            'account_type': account_type,
+        }
     )
+    return {"message": "Item inserted"}
 
-# Updating an item
-def update_item(table, username, last_name, age):
+# READ
+def get_item(username, last_name):
+    response = table.get_item(
+        Key={
+            'username': username,
+            'last_name': last_name
+        }
+    )
+    return response.get("Item", {})
+
+# UPDATE
+def update_item(username, last_name, age):
     table.update_item(
         Key={
             'username': username,
@@ -63,40 +39,73 @@ def update_item(table, username, last_name, age):
             ':val1': age
         }
     )
+    return {"message": "Item updated"}
 
-# Deleting an item
-def delete_item(table, username, last_name):
+# DELETE
+def delete_item(username, last_name):
     table.delete_item(
         Key={
             'username': username,
             'last_name': last_name
         }
     )
+    return {"message": "Item deleted"}
 
-# Getting an item
-def get_item(table, username, last_name):
-    response = table.get_item(
-        Key={
-            'username': username,
-            'last_name': last_name
-        }
-    )
-    item = response['Item']
-    return item
-
+# ROUTER
 def lambda_handler(event, context):
-    # TODO implement
-    table_name = event.get("Tablename", "No table name provided")
-    username = event.get("username")
-    first_name = event.get("first_name")
-    last_name = event.get("last_name")
-    age = event.get("age")
-    account_type = event.get("account_type")
 
-    table = dynamodb.Table(table_name)
-    insert_item(table, username, first_name, last_name, age, account_type)
+    action = event.get("action")
 
-    return {
-        'statusCode': 200,
-        'body': json.dumps('Item inserted!')
-    }
+    if action == "create":
+        return {
+            "statusCode": 200,
+            "body": json.dumps(
+                insert_item(
+                    event["username"],
+                    event["first_name"],
+                    event["last_name"],
+                    event["age"],
+                    event["account_type"]
+                )
+            )
+        }
+
+    elif action == "read":
+        return {
+            "statusCode": 200,
+            "body": json.dumps(
+                get_item(
+                    event["username"],
+                    event["last_name"]
+                )
+            )
+        }
+
+    elif action == "update":
+        return {
+            "statusCode": 200,
+            "body": json.dumps(
+                update_item(
+                    event["username"],
+                    event["last_name"],
+                    event["age"]
+                )
+            )
+        }
+
+    elif action == "delete":
+        return {
+            "statusCode": 200,
+            "body": json.dumps(
+                delete_item(
+                    event["username"],
+                    event["last_name"]
+                )
+            )
+        }
+
+    else:
+        return {
+            "statusCode": 400,
+            "body": json.dumps({"error": "Invalid action"})
+        }
