@@ -1,0 +1,34 @@
+Example events for testing in AWS Lambda
+
+CREATE
+{
+  "action": "create",
+  "username": "janedoe",
+  "first_name": "Jane",
+  "last_name": "Doe",
+  "age": 25,
+  "account_type": "standard_user"
+}
+
+READ
+{
+  "action": "read",
+  "username": "janedoe",
+  "last_name": "Doe"
+}
+
+UPDATE
+{
+  "action": "update",
+  "username": "janedoe",
+  "last_name": "Doe",
+  "age": 30
+}
+
+DELETE
+{
+  "action": "delete",
+  "username": "janedoe",
+  "last_name": "Doe"
+}
+
