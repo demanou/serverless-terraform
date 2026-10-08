@@ -86,12 +86,17 @@ def get_item(table, username, last_name):
 
 def lambda_handler(event, context):
     # TODO implement
-    # table_name = event.get("Tablename", "No table name provided")
+    table_name = event.get("Tablename", "No table name provided")
+    username = event.get("username")
+    first_name = event.get("first_name")
+    last_name = event.get("last_name")
+    age = event.get("age")
+    account_type = event.get("account_type")
 
-    # Create the DynamoDB table
-    table_name = create_table()
+    table = dynamodb.Table(table_name)
+    insert_item(table, username, first_name, last_name, age, account_type)
 
     return {
         'statusCode': 200,
-        'body': json.dumps('Table created!')
+        'body': json.dumps('Item inserted!')
     }
