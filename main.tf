@@ -1,4 +1,38 @@
-# IAM role for Lambda execution
+locals {
+  name_prefix   = "${var.project_name}-${var.environment}"
+  function_name = "${local.name_prefix}-crud"
+}
+
+# ---------------------------------------------------------------------------
+# DynamoDB table
+# ---------------------------------------------------------------------------
+resource "aws_dynamodb_table" "users" {
+  name         = var.table_name
+  billing_mode = "PAY_PER_REQUEST"
+
+  hash_key  = "username"
+  range_key = "last_name"
+
+  attribute {
+    name = "username"
+    type = "S"
+  }
+
+  attribute {
+    name = "last_name"
+    type = "S"
+  }
+
+  # Point-in-time recovery (continuous backups) for production only.
+  # Encryption at rest is on by default with an AWS owned key.
+  point_in_time_recovery {
+    enabled = var.environment == "prod"
+  }
+}
+
+# ---------------------------------------------------------------------------
+# IAM role for the Lambda function (least privilege)
+# ---------------------------------------------------------------------------
 data "aws_iam_policy_document" "assume_role" {
   statement {
     effect = "Allow"
@@ -12,81 +46,103 @@ data "aws_iam_policy_document" "assume_role" {
   }
 }
 
-resource "aws_iam_role_policy" "lambda_dynamodb_sns_full" {
-  name = "lambda_dynamodb_sns_full"
-  role = aws_iam_role.example.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "dynamodb:*"
-        ]
-        Resource = "*"
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "sns:*"
-        ]
-        Resource = "*"
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role" "example" {
-  name               = "lambda_execution_role"
+resource "aws_iam_role" "lambda_exec" {
+  name               = "${local.name_prefix}-lambda-role"
   assume_role_policy = data.aws_iam_policy_document.assume_role.json
 }
 
-# Package the Lambda function code
-data "archive_file" "example" {
-  type        = "zip"
-  source_file = "${path.module}/lambda/lambda_dynamodb.py"
-  output_path = "${path.module}/lambda/function.zip"
+data "aws_iam_policy_document" "lambda_permissions" {
+  # Only the four actions the function uses, only on this table
+  statement {
+    sid    = "DynamoDBCrud"
+    effect = "Allow"
+
+    actions = [
+      "dynamodb:PutItem",
+      "dynamodb:GetItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:DeleteItem",
+    ]
+
+    resources = [aws_dynamodb_table.users.arn]
+  }
+
+  # Write logs to this function's log group only
+  statement {
+    sid    = "CloudWatchLogs"
+    effect = "Allow"
+
+    actions = [
+      "logs:CreateLogStream",
+      "logs:PutLogEvents",
+    ]
+
+    resources = ["${aws_cloudwatch_log_group.lambda.arn}:*"]
+  }
 }
 
-# Lambda function
-resource "aws_lambda_function" "example" {
-  filename      = data.archive_file.example.output_path
-  function_name = "example_lambda_function"
-  role          = aws_iam_role.example.arn
-  handler       = "lambda_dynamodb.lambda_handler"
-  source_code_hash = data.archive_file.example.output_base64sha256
+resource "aws_iam_role_policy" "lambda_permissions" {
+  name   = "${local.name_prefix}-lambda-policy"
+  role   = aws_iam_role.lambda_exec.id
+  policy = data.aws_iam_policy_document.lambda_permissions.json
+}
 
-  runtime = "python3.13"
-  timeout = 10 # Increase from 3 → 10 seconds
+# ---------------------------------------------------------------------------
+# CloudWatch log group (created by Terraform so retention is controlled)
+# ---------------------------------------------------------------------------
+resource "aws_cloudwatch_log_group" "lambda" {
+  name              = "/aws/lambda/${local.function_name}"
+  retention_in_days = var.log_retention_days
+}
+
+# ---------------------------------------------------------------------------
+# Lambda function
+# ---------------------------------------------------------------------------
+data "archive_file" "lambda_zip" {
+  type        = "zip"
+  source_file = "${path.module}/lambda/lambda_dynamodb.py"
+  output_path = "${path.module}/build/lambda_dynamodb.zip"
+}
+
+resource "aws_lambda_function" "users_crud" {
+  function_name    = local.function_name
+  description      = "CRUD operations on the ${var.table_name} DynamoDB table"
+  role             = aws_iam_role.lambda_exec.arn
+  handler          = "lambda_dynamodb.lambda_handler"
+  runtime          = "python3.13"
+  filename         = data.archive_file.lambda_zip.output_path
+  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
+  timeout          = var.lambda_timeout
+  memory_size      = var.lambda_memory_size
 
   environment {
     variables = {
-      ENVIRONMENT = "production"
-      LOG_LEVEL   = "info"
+      TABLE_NAME = aws_dynamodb_table.users.name
+      LOG_LEVEL  = var.log_level
     }
   }
 
-  tags = {
-    Environment = "production"
-    Application = "example"
-  }
+  # Make sure permissions and the log group exist before the function runs
+  depends_on = [
+    aws_iam_role_policy.lambda_permissions,
+    aws_cloudwatch_log_group.lambda,
+  ]
 }
 
-resource "aws_dynamodb_table" "users" {
-  name           = "users"
-  billing_mode   = "PAY_PER_REQUEST"
+# ---------------------------------------------------------------------------
+# Renamed resources: keep existing state instead of destroying/recreating
+# ---------------------------------------------------------------------------
+moved {
+  from = aws_iam_role.example
+  to   = aws_iam_role.lambda_exec
+}
 
-  hash_key       = "username"
-  range_key      = "last_name"
+moved {
+  from = aws_lambda_function.example
+  to   = aws_lambda_function.users_crud
+}
 
-  attribute {
-    name = "username"
-    type = "S"
-  }
-
-  attribute {
-    name = "last_name"
-    type = "S"
-  }
+moved {
+  from = aws_iam_role_policy.lambda_dynamodb_sns_full
+  to   = aws_iam_role_policy.lambda_permissions
 }
